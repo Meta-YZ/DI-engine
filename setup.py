@@ -75,7 +75,8 @@ setup(
         'h5py',
         'rich',
         'mpire',
-        'pynng'
+        'pynng',
+        'DI-treetensor',
     ],
     extras_require={
         'test': [

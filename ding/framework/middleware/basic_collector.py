@@ -1,43 +1,88 @@
+from typing import TYPE_CHECKING, Callable
+from easydict import EasyDict
 import torch
-from typing import TYPE_CHECKING
-from ding.envs.env_manager import BaseEnvManager
-from ding.torch_utils import to_ndarray, to_tensor
+from ding.envs import BaseEnvManager
 from ding.policy import Policy
-from ding.rl_utils import get_epsilon_greedy_fn
-from ding.worker.buffer import Buffer
+from ding.buffer import Buffer
 
 if TYPE_CHECKING:
     from ding.framework import Task, Context
 
 
-def basic_collector(task: "Task", cfg: dict, policy: Policy, env: BaseEnvManager, buffer: Buffer):
+# TODO ctx member variable definition
+def inferencer(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager) -> Callable:
     env.seed(cfg.seed)
+    policy = policy.collect_mode
 
-    epsilon_greedy = None
-    if 'eps' in cfg.policy.other:
-        eps_cfg = cfg.policy.other.eps
-        epsilon_greedy = get_epsilon_greedy_fn(eps_cfg.start, eps_cfg.end, eps_cfg.decay, eps_cfg.type)
-
-    def _collect(ctx: "Context"):
-        if env._closed:
+    def _inference(ctx: "Context"):
+        if env.closed:
             env.launch()
-
         ctx.setdefault("collect_env_step", 0)
         ctx.keep("collect_env_step")
 
         obs = env.ready_obs
+        # TODO mask necessary rollout
         policy_kwargs = {}
-        if epsilon_greedy:
-            policy_kwargs['eps'] = epsilon_greedy(ctx.collect_env_step)
+        # TODO eps greedy
 
-        policy_output = policy.collect_mode.forward(obs, **policy_kwargs)
-        action = to_ndarray({env_id: output['action'] for env_id, output in policy_output.items()})
+        policy_output = policy.forward(obs, **policy_kwargs)
+        ctx.action = policy_output.action.numpy()
+        ctx.policy_output = policy_output
 
-        timesteps = env.step(action)
+    return _inference
+
+
+def rolloutor(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, buffer_: Buffer) -> Callable:
+    # TODO whether need to access member variable
+    policy = policy.collect_mode
+
+    def _rollout(ctx):
+        ctx.setdefault("collect_env_episode", 0)
+        ctx.keep("collect_env_episode")
+        timesteps = env.step(ctx.action)
         ctx.collect_env_step += len(timesteps)
-        timesteps = to_tensor(timesteps, dtype=torch.float32)
+        timesteps = timesteps.tensor(dtype=torch.float32)
+        transitions = policy.process_transition(ctx.obs, ctx.policy_output, timesteps)
+        transitions.collect_train_iter = ctx.train_iter
+        buffer_.push(transitions)
+        # TODO abnormal env step
         for env_id, timestep in timesteps.items():
-            transition = policy.collect_mode.process_transition(obs[env_id], policy_output[env_id], timestep)
-            buffer.push(transition)
+            if timestep.done:
+                policy.reset([env_id])
+                ctx.collect_env_episode += 1
+        # TODO log
+
+    return _rollout
+
+
+def step_collector(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, buffer_: Buffer) -> Callable:
+    _inferencer = inferencer(task, cfg, policy, env)
+    _rolloutor = rolloutor(task, cfg, policy, env, buffer_)
+
+    def _collect(ctx: "Context"):
+        old = ctx.collect_env_step
+        while True:
+            _inferencer(ctx)
+            _rolloutor(ctx)
+            if ctx.collect_env_step - old > cfg.policy.collect.n_sample * cfg.policy.collect.unroll_len:
+                break
 
     return _collect
+
+
+def episode_collector(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, buffer_: Buffer) -> Callable:
+    _inferencer = inferencer(task, cfg, policy, env)
+    _rolloutor = rolloutor(task, cfg, policy, env, buffer_)
+
+    def _collect(ctx: "Context"):
+        old = ctx.collect_env_episode
+        while True:
+            _inferencer(ctx)
+            _rolloutor(ctx)
+            if ctx.collect_env_episode - old > cfg.policy.collect.n_episode:
+                break
+
+    return _collect
+
+
+# TODO battle collector
