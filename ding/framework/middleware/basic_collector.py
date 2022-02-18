@@ -3,7 +3,7 @@ from easydict import EasyDict
 import torch
 from ding.envs import BaseEnvManager
 from ding.policy import Policy
-from ding.buffer import Buffer
+from ding.data import Buffer
 
 if TYPE_CHECKING:
     from ding.framework import Task, Context
@@ -17,12 +17,13 @@ def inferencer(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager)
     def _inference(ctx: "Context"):
         if env.closed:
             env.launch()
-        ctx.setdefault("collect_env_step", 0)
-        ctx.keep("collect_env_step")
+        ctx.setdefault("env_step", 0)
+        ctx.keep("env_step")
 
         obs = env.ready_obs
         # TODO mask necessary rollout
         policy_kwargs = {}
+        # policy_kwargs = {'eps': eps_greedy(ctx.env_step)}
         # TODO eps greedy
 
         policy_output = policy.forward(obs, **policy_kwargs)
@@ -37,10 +38,10 @@ def rolloutor(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, 
     policy = policy.collect_mode
 
     def _rollout(ctx):
-        ctx.setdefault("collect_env_episode", 0)
-        ctx.keep("collect_env_episode")
+        ctx.setdefault("env_episode", 0)
+        ctx.keep("env_episode")
         timesteps = env.step(ctx.action)
-        ctx.collect_env_step += len(timesteps)
+        ctx.env_step += len(timesteps)
         timesteps = timesteps.tensor(dtype=torch.float32)
         transitions = policy.process_transition(ctx.obs, ctx.policy_output, timesteps)
         transitions.collect_train_iter = ctx.train_iter
@@ -49,7 +50,7 @@ def rolloutor(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, 
         for env_id, timestep in timesteps.items():
             if timestep.done:
                 policy.reset([env_id])
-                ctx.collect_env_episode += 1
+                ctx.env_episode += 1
         # TODO log
 
     return _rollout
@@ -60,11 +61,11 @@ def step_collector(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvMana
     _rolloutor = rolloutor(task, cfg, policy, env, buffer_)
 
     def _collect(ctx: "Context"):
-        old = ctx.collect_env_step
+        old = ctx.env_step
         while True:
             _inferencer(ctx)
             _rolloutor(ctx)
-            if ctx.collect_env_step - old > cfg.policy.collect.n_sample * cfg.policy.collect.unroll_len:
+            if ctx.env_step - old > cfg.policy.collect.n_sample * cfg.policy.collect.unroll_len:
                 break
 
     return _collect
@@ -75,11 +76,11 @@ def episode_collector(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvM
     _rolloutor = rolloutor(task, cfg, policy, env, buffer_)
 
     def _collect(ctx: "Context"):
-        old = ctx.collect_env_episode
+        old = ctx.env_episode
         while True:
             _inferencer(ctx)
             _rolloutor(ctx)
-            if ctx.collect_env_episode - old > cfg.policy.collect.n_episode:
+            if ctx.env_episode - old > cfg.policy.collect.n_episode:
                 break
 
     return _collect

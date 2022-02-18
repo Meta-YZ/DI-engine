@@ -6,7 +6,7 @@ from rich import print
 from easydict import EasyDict
 from ding.envs import BaseEnvManager
 from ding.policy import Policy
-from ding.buffer import Buffer
+from ding.data import Buffer
 from .eval_utils import VectorEvalMonitor, IMetric
 
 if TYPE_CHECKING:
@@ -49,6 +49,7 @@ def interaction_evaluator(task: "Task", cfg: EasyDict, policy: Policy, env: Base
         eval_reward = np.mean(episode_reward)
         stop_flag = eval_reward >= cfg.env.stop_value and ctx.train_iter > 0
         # TODO save_ckpt_fn
+        ctx.eval_reward = eval_reward
         # TODO evaluator log
         print('Current Evaluation: Train Iter({})\tEval Reward({:.3f})'.format(ctx.train_iter, eval_reward))
         ctx.last_eval_iter = ctx.train_iter
