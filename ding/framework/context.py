@@ -10,7 +10,9 @@ class Context(dict):
         super().__init__(*args, **kwargs)
         self.__dict__ = self
         self.total_step = total_step
-        self._kept_keys = set()
+        self.train_iter = 0
+        self.env_step = 0
+        self._kept_keys = set("train_iter", "env_step")
 
     def renew(self) -> 'Context':  # noqa
         """
