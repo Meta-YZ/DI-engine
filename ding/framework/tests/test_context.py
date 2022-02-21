@@ -5,7 +5,9 @@ import pickle
 
 @pytest.mark.unittest
 def test_pickable():
-    ctx = Context(hello="world", keep_me=True)
+    ctx = Context()
+    ctx.hello = "world"
+    ctx.keep_me = True
     ctx.keep("keep_me")
     _ctx = pickle.loads(pickle.dumps(ctx))
     assert _ctx.hello == "world"

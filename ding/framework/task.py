@@ -66,7 +66,6 @@ class Task:
         self.middleware = middleware or []
         self.step_wrappers = step_wrappers or []
         self.ctx = Context()
-        self.parallel_ctx = Context()
         self._backward_stack = []
         # Bind event loop functions
         self._event_loop = EventLoop("task_{}".format(id(self)))
