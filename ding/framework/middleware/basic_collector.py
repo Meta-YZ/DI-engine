@@ -9,7 +9,23 @@ if TYPE_CHECKING:
     from ding.framework import Task, Context
 
 
-# TODO ctx member variable definition
+from ding.rl_utils import get_eps_greedy_fn
+
+
+def eps_greedy(task: "Task", cfg: EasyDict) -> Callable:
+    handle = get_eps_greedy_fn(cfg.policy.other.eps)
+
+    def _eps_greedy(ctx: "Context"):
+        ctx.collect_kwargs['eps'] = handle(ctx.env_step)
+        yield
+        try:
+            ctx.collect_kwargs.pop('eps')
+        except:  # noqa
+            pass
+
+    return _eps_greedy
+
+
 def inferencer(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager) -> Callable:
     env.seed(cfg.seed)
     policy = policy.collect_mode
@@ -18,24 +34,22 @@ def inferencer(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager)
         if env.closed:
             env.launch()
         ctx.setdefault("env_step", 0)
+        ctx.setdefault("collect_kwargs", {})
         ctx.keep("env_step")
 
         obs = env.ready_obs
         # TODO mask necessary rollout
-        policy_kwargs = {}
-        # policy_kwargs = {'eps': eps_greedy(ctx.env_step)}
-        # TODO eps greedy
 
-        policy_output = policy.forward(obs, **policy_kwargs)
-        ctx.action = policy_output.action.numpy()
-        ctx.policy_output = policy_output
+        inference_output = policy.forward(obs, **ctx.collect_kwargs)
+        ctx.action = inference_output.action.numpy()
+        ctx.inference_output = inference_output
 
     return _inference
 
 
 def rolloutor(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, buffer_: Buffer) -> Callable:
-    # TODO whether need to access member variable
     policy = policy.collect_mode
+    logger = task.logger
 
     def _rollout(ctx):
         ctx.setdefault("env_episode", 0)
@@ -43,7 +57,7 @@ def rolloutor(task: "Task", cfg: EasyDict, policy: Policy, env: BaseEnvManager, 
         timesteps = env.step(ctx.action)
         ctx.env_step += len(timesteps)
         timesteps = timesteps.tensor(dtype=torch.float32)
-        transitions = policy.process_transition(ctx.obs, ctx.policy_output, timesteps)
+        transitions = policy.process_transition(ctx.obs, ctx.inference_output, timesteps)
         transitions.collect_train_iter = ctx.train_iter
         buffer_.push(transitions)
         # TODO abnormal env step
