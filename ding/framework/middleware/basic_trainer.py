@@ -16,6 +16,8 @@ def trainer(task: "Task", cfg: EasyDict, policy: Policy) -> Callable:
         ctx.setdefault("train_output", {})
         ctx.keep("train_output")
 
+        if ctx.data is None:  # no enough data from data fetcher
+            return
         train_output = policy.forward(ctx.data)
         if ctx.train_iter % cfg.train_log_freq == 0:
             logger.info(
